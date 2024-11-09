@@ -1,0 +1,475 @@
+Record And Transcribe Your Phone Link Conversations using Python
+alex buzunov
+CodeX
+alex buzunov
+
+Published in
+CodeX
+
+·
+10 min read
+·
+1 day ago
+3
+
+
+
+
+
+
+Ever paid $20 a month just to record important phone calls on your iPhone? There’s a better way (I think). With just an $8 Bluetooth dongle and some Python magic, you can build your own call recording setup right on your desktop.
+
+
+AI art by Alex Buzunov
+In this tutorial, I’ll show you how to:
+
+Capture high-quality audio from any phone call
+Save recordings automatically
+Generate accurate transcripts using speech recognition
+Store everything securely on your computer
+The best part? No monthly fees. Just a one-time purchase of an inexpensive Bluetooth adapter and a few lines of Python code. Let’s turn your computer into a powerful call recording station.
+
+Bluetooth Requirements
+Before we dive into setup, let’s ensure you have the right Bluetooth hardware:
+
+Minimum Requirements
+Bluetooth 4.0 or higher
+A2DP (Advanced Audio Distribution Profile) support
+HFP (Hands-Free Profile) 1.6 or higher
+Bluetooth Version Compatibility
+Bluetooth 5.0+ (Recommended): Offers the best audio quality and most stable connection
+Bluetooth 4.2: Works well but may have slightly reduced range
+Bluetooth 4.0–4.1: Minimal functionality, may experience audio quality issues
+Below 4.0: Not supported by Phone Link
+Known Limitations
+Audio latency: 20–40ms delay (negligible for most uses)
+Maximum range: ~10 meters with Bluetooth 4.0, ~40 meters with Bluetooth 5.0
+One active call recording at a time
+Some budget dongles may not support HFP properly
+Pro Tip: Look for dongles specifically advertising “HFP support” or “Hands-free calling capability.” Many basic Bluetooth adapters only support A2DP, which won’t work for call recording.
+
+Setting Up Phone Link
+First, we need to connect your phone to your computer using Microsoft’s Phone Link (formerly known as Your Phone). This free tool bridges your mobile device and PC, allowing us to capture audio from calls.
+
+Windows Setup
+Open the Microsoft Store on your Windows PC
+Search for “Phone Link” and install it
+Launch Phone Link and sign in with your Microsoft account
+Phone Setup
+On your Android phone, install “Link to Windows” from the Google Play Store
+Open your phone’s Settings > Advanced Features > Link to Windows
+Toggle “Link to Windows” on
+Scan the QR code shown on your PC screen
+Configuring Call Audio
+Once connected, click the “Calls” tab in Phone Link
+Enable “Calls” permission when prompted
+Make sure your Bluetooth dongle is plugged in and paired
+Test the connection with a quick call
+Python Implementation
+Let’s build our audio recorder class that can capture both microphone input (your voice) and speaker output (caller’s voice) simultaneously. First, install the required packages:
+
+pip install pyaudio wave datetime
+Here’s our core recording class:
+
+import pyaudio
+import wave
+from datetime import datetime
+import threading
+import time
+import os
+from os.path import join
+
+class AudioRecorder:
+    def __init__(self):
+        self.FORMAT = pyaudio.paInt16  # Audio format (16-bit)
+        self.RATE = 44100              # Sample rate (Hz)
+        self.CHUNK = 1024              # Buffer size
+        self.recording = False
+        self.frames = []
+        
+    def get_microphones(self):
+        """Get list of available microphone devices"""
+        audio = pyaudio.PyAudio()
+        microphones = []
+        
+        for i in range(audio.get_device_count()):
+            device_info = audio.get_device_info_by_index(i)
+            channels = int(device_info['maxInputChannels'])
+            
+            # Look for devices that are likely microphones
+            if channels > 0 and (
+                'mic' in device_info['name'].lower() or
+                'microphone' in device_info['name'].lower() or
+                device_info['name'].lower().startswith('input')
+            ):
+                microphones.append((i, device_info['name'], channels))
+                
+        return microphones
+
+    def start_recording(self, device_index, channels):
+        """Start recording from selected device"""
+        if self.recording:
+            return False
+            
+        self.recording = True
+        self.frames = []
+        self.audio = pyaudio.PyAudio()
+        
+        def record_thread():
+            stream = self.audio.open(
+                format=self.FORMAT,
+                channels=channels,
+                rate=self.RATE,
+                input=True,
+                input_device_index=device_index,
+                frames_per_buffer=self.CHUNK
+            )
+            
+            while self.recording:
+                data = stream.read(self.CHUNK)
+                self.frames.append(data)
+            
+            stream.stop_stream()
+            stream.close()
+        
+        threading.Thread(target=record_thread, daemon=True).start()
+        return True
+
+    def stop_recording(self):
+        """Stop recording and save the file"""
+        if not self.recording:
+            return None
+            
+        self.recording = False
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f'recording_{timestamp}.wav'
+        
+        wf = wave.open(filename, 'wb')
+        wf.setnchannels(self.channels)
+        wf.setsampwidth(self.audio.get_sample_size(self.FORMAT))
+        wf.setframerate(self.RATE)
+        wf.writeframes(b''.join(self.frames))
+        wf.close()
+        
+        return filename
+This implementation provides several key features:
+
+Device Detection: Automatically finds available microphone inputs
+Threading: Records audio in a separate thread to keep the main program responsive
+High Quality: Records at 44.1kHz with 16-bit depth
+Flexible Format: Saves recordings as WAV files with timestamps
+Resource Management: Properly closes audio streams and files
+Audio Enhancement and Cleanup
+Phone calls often come with unwanted noise, echoes, or silent periods. Let’s add some audio processing capabilities to clean up our recordings before transcription. We’ll use pydub and noisereduce for audio manipulation:
+
+pip install pydub noisereduce numpy scipy
+Audio Processing Class
+
+from pydub import AudioSegment
+import noisereduce as nr
+import numpy as np
+from scipy.io import wavfile
+import os
+from datetime import datetime
+
+class AudioEnhancer:
+    def __init__(self, output_dir='output'):
+        self.output_dir = output_dir
+        self._callback = None
+        
+    def set_callback(self, callback):
+        self._callback = callback
+        
+    def _log(self, message):
+        if self._callback:
+            self._callback(message)
+            
+    def enhance_recording(self, input_file, prefix=None):
+        """Apply audio enhancements to recording"""
+        try:
+            self._log(f"Loading audio file: {input_file}")
+            # Load audio file
+            rate, data = wavfile.read(input_file)
+            
+            # Convert to float32 for processing
+            data = data.astype(np.float32, order='C') / 32768.0
+            
+            # Apply noise reduction
+            self._log("Reducing background noise...")
+            reduced_noise = nr.reduce_noise(
+                y=data,
+                sr=rate,
+                stationary=True,
+                prop_decrease=0.75
+            )
+            
+            # Normalize audio levels
+            self._log("Normalizing audio levels...")
+            peak = np.abs(reduced_noise).max()
+            if peak > 0:
+                normalized = reduced_noise / peak
+            else:
+                normalized = reduced_noise
+                
+            # Save enhanced audio
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            if prefix is None:
+                prefix = os.path.splitext(os.path.basename(input_file))[0]
+                
+            output_file = os.path.join(
+                self.output_dir,
+                f'{prefix}_enhanced_{timestamp}.wav'
+            )
+            
+            # Convert back to int16
+            normalized = (normalized * 32768.0).astype(np.int16)
+            
+            self._log("Saving enhanced audio...")
+            wavfile.write(output_file, rate, normalized)
+            
+            return output_file
+            
+        except Exception as e:
+            self._log(f"Error during audio enhancement: {str(e)}")
+            return None
+            
+    def enhance_conversation(self, mic_file, speaker_file):
+        """Enhance both sides of a conversation"""
+        try:
+            # Create enhanced conversation directory
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            conv_dir = os.path.join(self.output_dir, f'enhanced_{timestamp}')
+            os.makedirs(conv_dir, exist_ok=True)
+            
+            results = {
+                'mic': None,
+                'speaker': None
+            }
+            
+            # Enhance microphone recording
+            if mic_file and os.path.exists(mic_file):
+                self._log("Enhancing your side of conversation...")
+                results['mic'] = self.enhance_recording(
+                    mic_file,
+                    f'mic_{timestamp}'
+                )
+                
+            # Enhance speaker recording
+            if speaker_file and os.path.exists(speaker_file):
+                self._log("Enhancing other side of conversation...")
+                results['speaker'] = self.enhance_recording(
+                    speaker_file,
+                    f'speaker_{timestamp}'
+                )
+                
+            return results
+            
+        except Exception as e:
+            self._log(f"Error enhancing conversation: {str(e)}")
+            return None
+Building the GUI with wxPython
+Now let’s create a user-friendly interface to control our recordings. We’ll use wxPython for this as it provides native-looking controls and good performance. First, install wxPython:
+
+pip install wxPython
+Here’s our GUI implementation:
+
+import wx
+import os
+from datetime import datetime
+
+class AudioRecorderFrame(wx.Frame):
+    def __init__(self):
+        super().__init__(parent=None, title='Call Recorder', size=(800, 500))
+        self.recorder = AudioRecorder()
+        self.init_ui()
+        
+    def init_ui(self):
+        """Initialize the user interface"""
+        panel = wx.Panel(self)
+        main_sizer = wx.BoxSizer(wx.VERTICAL)
+        
+        # Create log window
+        self.log_list = wx.ListCtrl(
+            panel,
+            style=wx.LC_REPORT | wx.BORDER_SUNKEN
+        )
+        self.log_list.InsertColumn(0, 'Time', width=150)
+        self.log_list.InsertColumn(1, 'Message', width=600)
+        
+        # Device selection area
+        device_box = wx.StaticBox(panel, label="Recording Devices")
+        device_sizer = wx.StaticBoxSizer(device_box, wx.VERTICAL)
+        
+        # Microphone controls
+        mic_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        mic_label = wx.StaticText(panel, label='Microphone:')
+        self.mic_choice = wx.Choice(panel)
+        self.mic_record_btn = wx.Button(panel, label='Record Mic')
+        
+        mic_sizer.Add(mic_label, 0, wx.ALL | wx.CENTER, 5)
+        mic_sizer.Add(self.mic_choice, 1, wx.ALL | wx.EXPAND, 5)
+        mic_sizer.Add(self.mic_record_btn, 0, wx.ALL, 5)
+        
+        # Speaker controls
+        speaker_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        speaker_label = wx.StaticText(panel, label='Speaker:')
+        self.speaker_choice = wx.Choice(panel)
+        self.speaker_record_btn = wx.Button(panel, label='Record Speaker')
+        
+        speaker_sizer.Add(speaker_label, 0, wx.ALL | wx.CENTER, 5)
+        speaker_sizer.Add(self.speaker_choice, 1, wx.ALL | wx.EXPAND, 5)
+        speaker_sizer.Add(self.speaker_record_btn, 0, wx.ALL, 5)
+        
+        # Add to device sizer
+        device_sizer.Add(mic_sizer, 0, wx.ALL | wx.EXPAND, 5)
+        device_sizer.Add(speaker_sizer, 0, wx.ALL | wx.EXPAND, 5)
+        
+        # Control buttons
+        button_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        self.refresh_btn = wx.Button(panel, label='Refresh Devices')
+        self.both_btn = wx.Button(panel, label='Record Both')
+        
+        button_sizer.Add(self.refresh_btn, 0, wx.ALL, 5)
+        button_sizer.Add(self.both_btn, 0, wx.ALL, 5)
+        
+        # Bind events
+        self.mic_choice.Bind(wx.EVT_CHOICE, self.on_mic_change)
+        self.speaker_choice.Bind(wx.EVT_CHOICE, self.on_speaker_change)
+        self.mic_record_btn.Bind(wx.EVT_BUTTON, self.on_record_mic)
+        self.speaker_record_btn.Bind(wx.EVT_BUTTON, self.on_record_speaker)
+        self.refresh_btn.Bind(wx.EVT_BUTTON, self.on_refresh)
+        self.both_btn.Bind(wx.EVT_BUTTON, self.on_record_both)
+        
+        # Add everything to main sizer
+        main_sizer.Add(self.log_list, 1, wx.ALL | wx.EXPAND, 5)
+        main_sizer.Add(device_sizer, 0, wx.ALL | wx.EXPAND, 5)
+        main_sizer.Add(button_sizer, 0, wx.ALIGN_CENTER | wx.ALL, 5)
+        
+        panel.SetSizer(main_sizer)
+        
+        # Add status bar
+        self.CreateStatusBar()
+        self.SetStatusText('Ready')
+        
+        # Initialize devices
+        self.populate_devices()
+    
+    def populate_devices(self):
+        """Populate device choices"""
+        # Get available devices
+        self.microphones = self.recorder.get_microphones()
+        self.speakers = self.recorder.get_speakers()
+        
+        # Populate microphone choice
+        self.mic_choice.Clear()
+        for i, name, channels in self.microphones:
+            self.mic_choice.Append(f'{name} ({channels}ch)')
+        if self.microphones:
+            self.mic_choice.SetSelection(0)
+            
+        # Populate speaker choice
+        self.speaker_choice.Clear()
+        for speaker in self.speakers:
+            self.speaker_choice.Append(speaker['name'])
+        if self.speakers:
+            self.speaker_choice.SetSelection(0)
+    
+    def log_message(self, message):
+        """Add a message to the log window"""
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        index = self.log_list.GetItemCount()
+        self.log_list.InsertItem(index, timestamp)
+        self.log_list.SetItem(index, 1, message)
+        self.log_list.EnsureVisible(index)
+Key GUI Features
+Device Selection: Dropdown menus for choosing input/output devices
+
+Recording Controls:
+
+Individual buttons for mic and speaker recording
+Combined recording option for both sources
+Visual feedback during recording
+Logging Window:
+
+Timestamps for all events
+Scrollable history of operations
+Status updates for recordings
+Status Bar: Shows current application state
+
+Device Management:
+
+Auto-detection of available devices
+Refresh button to update device list
+Clear device labels with channel information
+Running the Application
+To launch the recorder, simply execute this in CLI:
+
+python record_phone_link.py
+Application Startup
+When you first launch the Audio Recorder application, you’ll see a few key elements designed to help you manage your call recordings effectively:
+
+
+Log Window: At the top, you’ll see a timestamped log window. Upon startup, the application logs that it has started successfully. As you proceed, this window will update with events, such as device selections, recording start/stop, and other actions, allowing you to track everything within the app.
+
+Device Selection:
+
+Microphone Recording Section: This section allows you to choose the microphone for recording. The dropdown will list available input devices, such as internal microphones or external USB mics. Once selected, you can start recording from this microphone or play the last recorded audio to verify the setup.
+Speaker Recording Section: This section enables you to choose an output device, typically a speaker or virtual audio device, to capture the caller’s audio. Like the microphone section, it includes options for recording, playback, and transcription.
+File Naming:
+
+In the bottom control panel, you’ll see a dynamically generated file prefix, which incorporates the date and time to uniquely label each recording session. This prefix helps you organize and locate your recordings easily.
+You can customize this prefix by clicking “Update Prefix” if you prefer a different naming convention.
+Recording Controls:
+
+Use the individual “Record Microphone” and “Record Speaker” buttons to capture audio from each source independently, or click “Record Both” for a synchronized recording of both microphone and speaker.
+After recording, you can play back the audio or click “Transcribe” to generate a transcript for each recorded file.
+Status Bar: At the very bottom, the application displays real-time status messages, such as “Ready” or “Recording…” to keep you informed of the current state.
+
+Microphone vs. Speaker Recording
+In a call recording setup, it’s essential to capture both sides of the conversation accurately. Here’s how our application handles recording for each side:
+
+Microphone Recording (Your Side of the Conversation):
+
+The microphone captures your own voice during the call. This is the device you speak into, typically your computer’s built-in microphone or an external USB mic.
+By selecting your microphone device in the “Microphone Recording” section of the app, you ensure that only your side of the conversation is recorded directly from your voice input. This setup is ideal for capturing your questions, instructions, or responses in the conversation.
+Speaker Recording (Other Person’s Side of the Conversation):
+
+The speaker recording captures the other person’s voice, i.e., the caller on the other end of the line.
+The application records this audio from the default output device, which is typically set to your computer’s speaker or, in this setup, the Bluetooth dongle. Since Microsoft’s Phone Link app transmits call audio through this output device, capturing the output lets us record the other person’s voice seamlessly.
+Why Separate the Inputs?
+Separating microphone and speaker inputs ensures each side of the conversation is recorded clearly and with minimal background noise. Using independent channels helps achieve better transcription accuracy, as each voice is isolated from overlapping audio or feedback.
+
+Combined Recording Option
+If you prefer a single recording file with both voices, you can use the “Record Both” feature in the app. This option records both the microphone and speaker audio simultaneously, creating a unified audio track that combines both sides of the conversation.
+
+Transcribing Microphone Recordings
+Once you’ve captured a microphone recording, you can generate a text transcript of the audio by clicking the “Transcribe” button in the Audio Recorder app. This action opens the Audio Transcription Tool window, where you can manage the transcription process with a few simple steps:
+
+
+Audio File Selection: The recorded file appears automatically in the input box at the top, showing the file path and name of the WAV file you just recorded.
+
+Transcription Engine:
+
+Use the Transcriber dropdown menu to select the transcription framework. In this setup, you can choose HuggingFace Transformers, which provides access to various state-of-the-art transcription models.
+Next, select the Model you want to use for transcription. The example in the screenshot uses openai/whisper-large-v3, a reliable model for high-quality speech recognition.
+Transcription Process:
+
+Click the Transcribe button to start the transcription. A progress bar below indicates the transcription’s status, turning green upon completion.
+The transcription text is displayed in the text area at the bottom, allowing you to review the output immediately.
+Saving and Accessing the Transcript:
+
+The transcription output is saved automatically to a text file with a timestamped filename for easy tracking. The file path to the saved transcript is displayed above the text area, so you can access or share it directly.
+If you need to copy the transcription to another application, simply click the Copy button to place the text on your clipboard.
+Playback:
+
+To verify or listen to specific parts of the recording, click Play Audio at the top right. This allows you to double-check sections of the transcription for accuracy without needing to reopen the main Audio Recorder window.
+Conclusion
+Recording and transcribing phone conversations on your desktop doesn’t have to be complicated or costly. With just a budget-friendly Bluetooth dongle and some Python magic, you now have a professional-grade call recording setup that saves you from monthly fees and unnecessary hassles. By following this guide, you’ve learned how to:
+
+Set up Bluetooth requirements for optimal audio quality,
+Seamlessly record phone conversations with customizable settings,
+Transcribe conversations with high accuracy using advanced models, and
+Organize and store your recordings and transcriptions securely on your computer.
+This DIY setup gives you complete control over your audio data, turning your computer into a powerful call recording station. Whether for business, interviews, or personal reference, you now have a reliable and flexible solution for managing your phone call recordings and transcriptions.
+
+Happy Coding!

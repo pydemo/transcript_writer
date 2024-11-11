@@ -1,6 +1,6 @@
 import pickle
 import warnings
-from os.path import basename
+from os.path import basename, splitext
 import openai
 import datetime
 from pubsub import pub
@@ -129,9 +129,9 @@ def main():
     
     pipeline = Processor()
     outputs = pipeline.run_stream_response(messages, MODEL)
-    bn=basename(fn) 
+    bn, _=splitext(basename(fn))
     timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")    
-    out_fn=f'{OUT_DIR}/{timestamp}_phone_link.pkl'
+    out_fn=f'{OUT_DIR}/openai_{timestamp}_{bn}.pkl'
 
     if outputs and outputs[0]["generated_text"]:
         save_string_pkl = outputs[0]["generated_text"][0]['content']
